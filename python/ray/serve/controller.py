@@ -29,6 +29,11 @@ from ray.serve.kv_store import RayInternalKVStore
 from ray.serve.long_poll import LongPollHost
 from ray.serve.utils import logger
 
+from threading import Thread, Timer
+import time
+import socket
+import json
+
 # Used for testing purposes only. If this is set, the controller will crash
 # after writing each checkpoint with the specified probability.
 _CRASH_AFTER_CHECKPOINT_PROBABILITY = 0
@@ -88,6 +93,60 @@ class ServeController:
                                           self.goal_manager)
 
         asyncio.get_event_loop().create_task(self.run_control_loop())
+
+        
+
+        Thread(target=self._listen).start()
+
+    def _listen(self):
+        """Listen for warning messages"""
+        # create socket to listen for all incoming TCP traffic
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # avoid address in use errors
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # bind to master port
+        sock.bind(("localhost", 8888))
+        # set buffer size to 5
+        sock.listen(5)
+        # set timeout
+        sock.settimeout(1)
+
+        # and now... we wait
+        while True:
+            try:
+                clientsocket, _ = sock.accept()
+            except socket.timeout:
+                continue
+            # handle_msg returns True iff it received a shutdown msg
+            msg_chunks = []
+            while True:
+                try:
+                    data = clientsocket.recv(4096)
+                except socket.timeout:
+                    continue
+                if not data:
+                    break
+                msg_chunks.append(data)
+            clientsocket.close()
+
+            # decode list-of-byte-strings to UTF8 and parse JSON data
+            msg_bytes = b''.join(msg_chunks)
+            msg_str = msg_bytes.decode("utf-8")
+            msg_dict = json.loads(msg_str)
+            # for key in self._all_replica_handles()['my_backend']:
+            #     print(key)
+            self.backend_state._target_replicas['my_backend'] += 1
+            Timer(float(msg_dict['time_left']), self._rescale_after_warning_expires, [1]).start()
+            # for backend, pair in self._all_replica_handles().items():
+            #     for h, actor in pair.items():
+            #         actor.drain_pending_queries.remote()
+            for key, val in self.get_http_proxies().items():
+                print(val.__dict__)
+
+        sock.close()
+    
+    def _rescale_after_warning_expires(self, num_replicas):
+        self.backend_state._target_replicas['my_backend'] -= num_replicas
 
     async def wait_for_goal(self, goal_id: GoalId) -> None:
         await self.goal_manager.wait_for_goal(goal_id)
