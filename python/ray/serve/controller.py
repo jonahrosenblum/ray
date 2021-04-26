@@ -157,6 +157,9 @@ class ServeController:
         Timer(time_left, self._rescale_after_warning_expires, [num_replicas, target_backend]).start()
     
     def _actor_handle_matches_node(self, node_ip, actor_handle, mock_variable):
+        # https://github.com/ray-project/ray/issues/7431
+        # annoyingly, it doesn't seem that we can actually determine this currently, but it will
+        # be implemented soon which will make this part fairly simple. for now we mock this,
         return mock_variable
 
     def _graceful_shutdown_before_shutoff(self, target_actors):
