@@ -128,23 +128,41 @@ class ServeController:
                     break
                 msg_chunks.append(data)
             clientsocket.close()
-
+            
             # decode list-of-byte-strings to UTF8 and parse JSON data
             msg_bytes = b''.join(msg_chunks)
             msg_str = msg_bytes.decode("utf-8")
             msg_dict = json.loads(msg_str)
-            # for key in self._all_replica_handles()['my_backend']:
-            #     print(key)
-            self.backend_state._target_replicas[msg_dict['backend-name']] += 1
-            Timer(float(msg_dict['time_left']), self._rescale_after_warning_expires, [1, msg_dict['backend-name']]).start()
-            # for backend, pair in self._all_replica_handles().items():
-            #     for h, actor in pair.items():
-            #         actor.drain_pending_queries.remote()
-            # for key, val in self.get_http_proxies().items():
-            #     print(val.__dict__)
+            self._handle_warning(msg_dict['node_ip'], float(msg_dict['time_left']))
 
         sock.close()
     
+    def _handle_warning(self, node_ip, time_left):
+        target_backend = None
+        target_actors = []
+        num_replicas = 0
+        mock_variable = True
+        for backend, pair in self._all_replica_handles().items():
+            for tag, actor_handle in pair.items():
+                if self._actor_handle_matches_node(node_ip, actor_handle, mock_variable):
+                    mock_variable = False
+                    target_backend = backend
+                    target_actors.append(actor_handle)
+                    num_replicas += 1
+        self.backend_state._target_replicas[target_backend] += num_replicas
+        print(num_replicas)
+        # Drain Queries 5 seconds before shutdown
+        Timer(time_left - 5, self._graceful_shutdown_before_shutoff, [target_actors]).start()
+        # Rescale number of replicas after warning has expired
+        Timer(time_left, self._rescale_after_warning_expires, [num_replicas, target_backend]).start()
+    
+    def _actor_handle_matches_node(self, node_ip, actor_handle, mock_variable):
+        return mock_variable
+
+    def _graceful_shutdown_before_shutoff(self, target_actors):
+        for actor_handle in target_actors:
+            actor_handle.drain_pending_queries.remote()
+
     def _rescale_after_warning_expires(self, num_replicas, backend_name):
         self.backend_state._target_replicas[backend_name] -= num_replicas
 
