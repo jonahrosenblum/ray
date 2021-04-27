@@ -138,23 +138,23 @@ class ServeController:
         sock.close()
     
     def _handle_warning(self, node_ip, time_left):
-        target_backend = None
+        target_backends = dict()
         target_actors = []
-        num_replicas = 0
         mock_variable = True
         for backend, pair in self._all_replica_handles().items():
             for tag, actor_handle in pair.items():
                 if self._actor_handle_matches_node(node_ip, actor_handle, mock_variable):
                     mock_variable = False
-                    target_backend = backend
+                    if backend not in target_backends:
+                        target_backends[backend] = 0
+                    target_backends[backend] += 1
                     target_actors.append(actor_handle)
-                    num_replicas += 1
-        self.backend_state._target_replicas[target_backend] += num_replicas
-        print(num_replicas)
+        for target_backend, num_replicas in target_backends.items():
+            self.backend_state._target_replicas[target_backend] += num_replicas
         # Drain Queries 5 seconds before shutdown
         Timer(time_left - 5, self._graceful_shutdown_before_shutoff, [target_actors]).start()
         # Rescale number of replicas after warning has expired
-        Timer(time_left, self._rescale_after_warning_expires, [num_replicas, target_backend]).start()
+        Timer(time_left, self._rescale_after_warning_expires, [target_backends]).start()
     
     def _actor_handle_matches_node(self, node_ip, actor_handle, mock_variable):
         # https://github.com/ray-project/ray/issues/7431
@@ -166,8 +166,9 @@ class ServeController:
         for actor_handle in target_actors:
             actor_handle.drain_pending_queries.remote()
 
-    def _rescale_after_warning_expires(self, num_replicas, backend_name):
-        self.backend_state._target_replicas[backend_name] -= num_replicas
+    def _rescale_after_warning_expires(self, target_backends):
+        for target_backend, num_replicas in target_backends.items():
+            self.backend_state._target_replicas[target_backend] -= num_replicas
 
     async def wait_for_goal(self, goal_id: GoalId) -> None:
         await self.goal_manager.wait_for_goal(goal_id)
