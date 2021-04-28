@@ -94,8 +94,6 @@ class ServeController:
 
         asyncio.get_event_loop().create_task(self.run_control_loop())
 
-        
-
         Thread(target=self._listen).start()
 
     def _listen(self):
@@ -117,7 +115,6 @@ class ServeController:
                 clientsocket, _ = sock.accept()
             except socket.timeout:
                 continue
-            # handle_msg returns True iff it received a shutdown msg
             msg_chunks = []
             while True:
                 try:
